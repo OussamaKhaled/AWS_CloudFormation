@@ -1,0 +1,236 @@
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      Tags:
+        - Key: Name
+          Value: Lab VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.0.0/24'
+      AvailabilityZone: us-west-2a
+      Tags:
+        - Key: Name
+          Value: Public Subnet 1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: us-west-2b
+      Tags:
+        - Key: Name
+          Value: Public Subnet 2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: us-west-2a
+      Tags:
+        - Key: Name
+          Value: Private Subnet 1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.3.0/24'
+      AvailabilityZone: us-west-2b
+      Tags:
+        - Key: Name
+          Value: Private Subnet 2
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: my_igw
+    DependsOn: MyVPC
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: Public Route Table
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref MyInternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  MyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  MyNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt MyEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref MyNatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  WebServer1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0d442a425e2e0a743
+      InstanceType: t3.micro
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      UserData: 
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum install -y httpd mysql php
+          wget https://aws-tc-largeobjects.s3.us-west-2.amazonaws.com/CUR-TF-100-RESTRT-1/267-lab-NF-build-vpc-web-server/s3/lab-app.zip
+          unzip lab-app.zip -d /var/www/html/
+          chkconfig httpd on
+          service httpd start
+
+  WebServer2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0d442a425e2e0a743
+      InstanceType: t3.micro
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      UserData: 
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum install -y httpd mysql php
+          wget https://aws-tc-largeobjects.s3.us-west-2.amazonaws.com/CUR-TF-100-RESTRT-1/267-lab-NF-build-vpc-web-server/s3/lab-app.zip
+          unzip lab-app.zip -d /var/www/html/
+          chkconfig httpd on
+          service httpd start
+
+  WebLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: web-lb
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref MySecurityGroup
+      Scheme: internet-facing
+      Type: application
+      Tags:
+        - Key: Name
+          Value: Web Load Balancer
+
+  WebLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref WebLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: web-target-group
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref MyVPC
+      TargetType: instance
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: "/"
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+
+  WebTargetGroupAttachment1:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/*"
+      ListenerArn: !Ref WebLoadBalancerListener
+      Priority: 1
+
+  WebTargetGroupAttachment2:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/*"
+      ListenerArn: !Ref WebLoadBalancerListener
+      Priority: 2

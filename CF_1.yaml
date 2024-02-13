@@ -94,6 +94,7 @@ Resources:
     Properties:
       Domain: vpc
 
+
   MyNatGateway:
     Type: AWS::EC2::NatGateway
     Properties:
